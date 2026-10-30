@@ -3,7 +3,8 @@ import uuid
 import base64
 
 import streamlit as st
-from streamlit_mic_recorder import mic_recorder
+
+from mic_recorder_custom import mic_recorder_custom
 
 from audio_pipeline import run_audio_pipeline
 from audio_pipeline_v2 import run_audio_pipeline_from_path
@@ -21,6 +22,8 @@ AUDIO_DIR = "outputs/recorded_audio"
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 LOGO = "Pulmono.AI.png"
+
+RECORD_SECONDS = 30
 
 # SESSION STATE
 DEFAULT_STATE = {
@@ -219,7 +222,6 @@ if st.session_state.page == "home":
             st.rerun()
 
 
-
 # ------------- RECORD PAGE ------------------
 elif st.session_state.page == "record":
 
@@ -252,51 +254,112 @@ elif st.session_state.page == "record":
         unsafe_allow_html=True
     )
 
-    st.warning(
-        "Click Start Recording, read continuously, then press Stop."
+    # st.info("""
+    # 🎙 Instructions
+    #
+    # 1. Click **🔴 Start Recording** below. This immediately starts both your
+    #    microphone and the 30-second timer.
+    # 2. Read the Rainbow Passage naturally.
+    # 3. Continue reading for approximately **30 seconds**.
+    # 4. Press **⏹ Stop Recording**.
+    # 5. Continue to the next page.
+    # """)
+
+    # Single custom component: one click both requests the microphone and
+    # starts the on-screen timer, since they happen in the same JS click
+    # handler in the same browser frame. Returns None until a recording has
+    # been stopped, then {"audio_base64": ..., "sample_rate": ..., "format": "wav"}.
+    # result = mic_recorder_custom(record_seconds=RECORD_SECONDS, key="custom_recorder")
+    #
+    # if result is not None and result.get("audio_base64"):
+    #     new_bytes = base64.b64decode(result["audio_base64"])
+    #
+    #     if new_bytes != st.session_state.audio_bytes:
+    #         path = save_audio(new_bytes)
+    #
+    #         st.session_state.audio_path = path
+    #         st.session_state.audio_bytes = new_bytes
+    #
+    #         st.success("Recording saved successfully.")
+    #
+    # if st.session_state.audio_bytes is not None:
+    #     st.audio(
+    #         st.session_state.audio_bytes,
+    #         format="audio/wav"
+    #     )
+    #
+    # col1, col2 = st.columns(2)
+    #
+    # with col1:
+    #
+    #     if st.button("⬅ Back"):
+    #         reset()
+    #
+    #         st.rerun()
+    #
+    # with col2:
+    #
+    #     if st.session_state.audio_path is not None:
+    #
+    #         if st.button("Next ➜"):
+    #             st.session_state.page = "phenotype"
+    #
+    #             st.rerun()
+
+    result = mic_recorder_custom(
+        record_seconds=RECORD_SECONDS,
+        key="custom_recorder"
     )
 
-    audio = mic_recorder(
-        start_prompt="🎙 Start Recording",
-        stop_prompt="⏹ Stop Recording",
-        just_once=False,
-        use_container_width=True,
-        key="mic_recording"
-    )
+    # DEBUG: Check what the recorder returns
+    if result is not None:
 
-    if audio is not None and audio["bytes"] != st.session_state.audio_bytes:
-        path = save_audio(audio["bytes"])
+        st.write("Recorder response type:", type(result))
 
-        st.session_state.audio_path = path
-        st.session_state.audio_bytes = audio["bytes"]
+        if isinstance(result, dict):
 
-        st.success("Recording saved successfully.")
+            st.write("Recorder response keys:", list(result.keys()))
 
+            if result.get("audio_base64"):
+
+                new_bytes = base64.b64decode(
+                    result["audio_base64"]
+                )
+
+                if new_bytes != st.session_state.audio_bytes:
+                    path = save_audio(new_bytes)
+
+                    st.session_state.audio_path = path
+                    st.session_state.audio_bytes = new_bytes
+
+                    st.success("Recording saved successfully!")
+
+            else:
+                st.warning("Recorder returned data, but no audio_base64 was found.")
+
+    # Display recording
     if st.session_state.audio_bytes is not None:
         st.audio(
             st.session_state.audio_bytes,
             format="audio/wav"
         )
 
+        st.success("Recording ready for analysis.")
+
+    # Navigation
     col1, col2 = st.columns(2)
 
     with col1:
-
         if st.button("⬅ Back"):
             reset()
-
             st.rerun()
 
     with col2:
-
-        if st.session_state.audio_path is not None:
+        if st.session_state.audio_bytes is not None:
 
             if st.button("Next ➜"):
                 st.session_state.page = "phenotype"
-
                 st.rerun()
-
-
 
 # ---------------- UPLOAD PAGE ----------------
 elif st.session_state.page == "upload":
@@ -471,8 +534,6 @@ elif st.session_state.page == "phenotype":
 
                             noise_mode=noise_mode,
 
-                            patient_info=patient_info,
-
                             crop_start=15,
 
                             crop_end=25
@@ -496,8 +557,6 @@ elif st.session_state.page == "phenotype":
                             uploaded_file=st.session_state.uploaded_file,
 
                             noise_mode=noise_mode,
-
-                            patient_info=patient_info
 
                         )
 
@@ -541,16 +600,10 @@ elif st.session_state.page == "results":
                 st.write("**Status:** Borderline Normal")
             else:
                 st.write("**Status:** Abnormal")
-            # st.write("**Status:**", results["fev1_binary_label"])
-            #
-            # st.write(
-            #     "**Severity:**",
-            #     results["fev1_multiclass_label"]
-            # )
-            #
-            # st.caption(
-            #     f"Confidence: {results['fev1_binary_confidence']:.1f}%"
-            # )
+
+            st.caption(
+                f"Confidence: {results['fev1_binary_confidence']:.1f}%"
+            )
 
         with col2:
 
@@ -568,19 +621,10 @@ elif st.session_state.page == "results":
             else:
                 st.write("**Status:** Abnormal")
 
-            # st.write(
-            #     "**Status:**",
-            #     results["fev1_fvc_binary_label"]
-            # )
-            #
-            # st.write(
-            #     "**Severity:**",
-            #     results["fev1_fvc_multiclass_label"]
-            # )
-            #
-            # st.caption(
-            #     f"Confidence: {results['fev1_fvc_binary_confidence']:.1f}%"
-            # )
+            st.caption(
+                f"Confidence: {results['fev1_fvc_binary_confidence']:.1f}%"
+            )
+
 
         st.warning(
             "Research prototype only. "

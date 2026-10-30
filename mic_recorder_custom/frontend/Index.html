@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, sans-serif;
+    background: transparent;
+  }
+  #wrap { padding: 4px 2px; }
+
+  #rec-btn {
+    width: 100%;
+    height: 48px;
+    font-size: 18px;
+    font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid rgba(49, 51, 63, 0.2);
+    background: #ffffff;
+    color: #262730;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.05s ease;
+  }
+  #rec-btn:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  #rec-btn:active { transform: scale(0.99); }
+  #rec-btn.recording {
+    background: #ff4b4b;
+    color: #ffffff;
+    border-color: #ff4b4b;
+  }
+  #rec-btn.recording:hover { background: #e13a3a; }
+  #rec-btn.saved {
+    background: #21c354;
+    color: #ffffff;
+    border-color: #21c354;
+  }
+  #rec-btn:disabled { cursor: default; opacity: 0.85; }
+
+  #status-area { margin-top: 10px; display: none; }
+  #timer-text { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  #progress-outer {
+    background: #e6e6e6;
+    border-radius: 6px;
+    overflow: hidden;
+    height: 12px;
+    width: 100%;
+  }
+  #progress-inner {
+    background: #4CAF50;
+    height: 100%;
+    width: 0%;
+    transition: width 1s linear;
+  }
+  #error-text {
+    color: #ff4b4b;
+    font-size: 14px;
+    margin-top: 8px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <button id="rec-btn">🔴 Start Recording</button>
+  <div id="status-area">
+    <div id="timer-text">⏱ Recording... 30 s remaining</div>
+    <div id="progress-outer"><div id="progress-inner"></div></div>
+  </div>
+  <div id="error-text"></div>
+</div>
+
+<script>
+/* ---------- Minimal vanilla-JS Streamlit component protocol ---------- */
+/* No build step / no external component-lib needed -- this is the same */
+/* handful of postMessage calls the official React template wraps.      */
+
+function sendToStreamlit(type, data) {
+  var payload = Object.assign({ isStreamlitMessage: true, type: type }, data || {});
+  window.parent.postMessage(payload, "*");
+}
+
+function streamlitSetComponentValue(value) {
+  sendToStreamlit("streamlit:setComponentValue", { value: value, dataType: "json" });
+}
+
+function streamlitSetFrameHeight() {
+  var h = document.documentElement.scrollHeight;
+  sendToStreamlit("streamlit:setFrameHeight", { height: h });
+}
+
+var RECORD_SECONDS = 30;
+
+window.addEventListener("message", function (event) {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  var args = event.data.args || {};
+  if (args.record_seconds) {
+    RECORD_SECONDS = args.record_seconds;
+    document.getElementById("timer-text").innerText =
+      "⏱ Recording... " + RECORD_SECONDS + " s remaining";
+  }
+});
+
+sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+setTimeout(streamlitSetFrameHeight, 0);
+
+/* ---------------------------- Recorder ---------------------------- */
+
+var recBtn = document.getElementById("rec-btn");
+var statusArea = document.getElementById("status-area");
+var timerText = document.getElementById("timer-text");
+var progressInner = document.getElementById("progress-inner");
+var errorText = document.getElementById("error-text");
+
+var state = "idle"; // idle -> recording -> stopped
+var audioContext, sourceNode, processorNode, mediaStream;
+var pcmChunks = [];
+var sampleRate = 44100;
+var timerInterval = null;
+
+function showError(msg) {
+  errorText.innerText = msg;
+  errorText.style.display = "block";
+  streamlitSetFrameHeight();
+}
+
+async function startRecording() {
+  errorText.style.display = "none";
+  pcmChunks = [];
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+  } catch (err) {
+    showError("Microphone access denied or unavailable: " + err.message);
+    return;
+  }
+
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  sampleRate = audioContext.sampleRate;
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+  // ScriptProcessorNode is deprecated but still broadly supported and
+  // needs no extra worklet file -- fine for this use case.
+  processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+
+  processorNode.onaudioprocess = function (e) {
+    var channelData = e.inputBuffer.getChannelData(0);
+    pcmChunks.push(new Float32Array(channelData));
+  };
+
+  sourceNode.connect(processorNode);
+  processorNode.connect(audioContext.destination);
+
+  state = "recording";
+  recBtn.innerText = "⏹ Stop Recording";
+  recBtn.classList.add("recording");
+  recBtn.classList.remove("saved");
+
+  statusArea.style.display = "block";
+  startTimer();
+  streamlitSetFrameHeight();
+}
+
+function stopRecording() {
+  if (processorNode) processorNode.disconnect();
+  if (sourceNode) sourceNode.disconnect();
+  if (mediaStream) mediaStream.getTracks().forEach(function (t) { t.stop(); });
+  if (audioContext) audioContext.close();
+  stopTimer();
+
+  var wavBlob = encodeWAV(pcmChunks, sampleRate);
+  var reader = new FileReader();
+  reader.onloadend = function () {
+    var base64data = reader.result.split(",")[1];
+    streamlitSetComponentValue({
+      audio_base64: base64data,
+      sample_rate: sampleRate,
+      format: "wav"
+    });
+  };
+  reader.readAsDataURL(wavBlob);
+
+  state = "stopped";
+  recBtn.innerText = "✅ Saved — Record Again";
+  recBtn.classList.remove("recording");
+  recBtn.classList.add("saved");
+  streamlitSetFrameHeight();
+}
+
+recBtn.addEventListener("click", function () {
+  if (state === "idle") {
+    startRecording();
+  } else if (state === "recording") {
+    stopRecording();
+  } else {
+    // "Record Again" -- reset and start a fresh recording immediately,
+    // still within this same click's user-gesture context.
+    state = "idle";
+    startRecording();
+  }
+});
+
+/* ------------------------------ Timer ------------------------------ */
+
+function startTimer() {
+  var elapsed = 0;
+  timerText.innerText = "⏱ Recording... " + RECORD_SECONDS + " s remaining";
+  progressInner.style.width = "0%";
+  progressInner.style.background = "#4CAF50";
+
+  timerInterval = setInterval(function () {
+    elapsed += 1;
+    var remaining = Math.max(0, RECORD_SECONDS - elapsed);
+    var pct = Math.min(100, (elapsed / RECORD_SECONDS) * 100);
+    progressInner.style.width = pct + "%";
+
+    if (remaining > 0) {
+      timerText.innerText = "⏱ Recording... " + remaining + " s remaining";
+    } else {
+      timerText.innerText = "✅ 30 seconds reached. You may now press Stop Recording.";
+      progressInner.style.background = "#2e7d32";
+      clearInterval(timerInterval);
+    }
+  }, 1000);
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+/* --------------------------- WAV encoding --------------------------- */
+
+function encodeWAV(channelBuffers, sr) {
+  var totalLength = 0;
+  for (var i = 0; i < channelBuffers.length; i++) totalLength += channelBuffers[i].length;
+
+  var samples = new Float32Array(totalLength);
+  var offset = 0;
+  for (var j = 0; j < channelBuffers.length; j++) {
+    samples.set(channelBuffers[j], offset);
+    offset += channelBuffers[j].length;
+  }
+
+  var buffer = new ArrayBuffer(44 + samples.length * 2);
+  var view = new DataView(buffer);
+
+  function writeString(view, offset, str) {
+    for (var i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  function floatTo16BitPCM(view, offset, input) {
+    for (var i = 0; i < input.length; i++, offset += 2) {
+      var s = Math.max(-1, Math.min(1, input[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+  }
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);       // PCM format
+  view.setUint16(22, 1, true);       // mono
+  view.setUint32(24, sr, true);      // sample rate
+  view.setUint32(28, sr * 2, true);  // byte rate
+  view.setUint16(32, 2, true);       // block align
+  view.setUint16(34, 16, true);      // bits per sample
+  writeString(view, 36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  floatTo16BitPCM(view, 44, samples);
+
+  return new Blob([view], { type: "audio/wav" });
+}
+</script>
+</body>
+</html>

@@ -24,7 +24,7 @@ def save_uploaded_file(uploaded_file):
     return file_path
 
 
-def run_audio_pipeline_without_pheno(uploaded_file, noise_mode, patient_info):
+def run_audio_pipeline_without_pheno(uploaded_file, noise_mode):
     audio_path = save_uploaded_file(uploaded_file)
 
     # 1. Optional denoising
@@ -38,11 +38,11 @@ def run_audio_pipeline_without_pheno(uploaded_file, noise_mode, patient_info):
     features = extract_features_from_audio(
         audio_path=audio_path,
         segments=segments,
-        patient_id="uploaded_audio"
+        #patient_id="uploaded_audio"
     )
 
     # 4. Add clinical/demographic features
-    features.update(patient_info)
+    #features.update(patient_info)
 
     # 5. Predict using all models
     results = predict_all_models(features)
