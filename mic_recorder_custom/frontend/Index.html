@@ -1,45 +1,78 @@
+
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
 <style>
-  * { box-sizing: border-box; }
+  * {
+    box-sizing: border-box;
+  }
+
   body {
     margin: 0;
-    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "Source Sans Pro", -apple-system,
+      BlinkMacSystemFont, sans-serif;
     background: transparent;
   }
-  #wrap { padding: 4px 2px; }
+
+  #wrap {
+    padding: 4px 2px;
+  }
 
   #rec-btn {
     width: 100%;
-    height: 48px;
+    height: 52px;
     font-size: 18px;
-    font-weight: 500;
+    font-weight: 600;
     border-radius: 8px;
     border: 1px solid rgba(49, 51, 63, 0.2);
     background: #ffffff;
     color: #262730;
     cursor: pointer;
-    transition: background 0.15s ease, transform 0.05s ease;
+    transition: background 0.15s ease;
   }
-  #rec-btn:hover { border-color: #ff4b4b; color: #ff4b4b; }
-  #rec-btn:active { transform: scale(0.99); }
+
+  #rec-btn:hover {
+    border-color: #ff4b4b;
+    color: #ff4b4b;
+  }
+
   #rec-btn.recording {
     background: #ff4b4b;
-    color: #ffffff;
+    color: white;
     border-color: #ff4b4b;
   }
-  #rec-btn.recording:hover { background: #e13a3a; }
+
   #rec-btn.saved {
     background: #21c354;
-    color: #ffffff;
+    color: white;
     border-color: #21c354;
   }
-  #rec-btn:disabled { cursor: default; opacity: 0.85; }
 
-  #status-area { margin-top: 10px; display: none; }
-  #timer-text { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  #rec-btn.processing {
+    background: #e6a23c;
+    color: white;
+    border-color: #e6a23c;
+  }
+
+  #rec-btn:disabled {
+    cursor: default;
+    opacity: 0.85;
+  }
+
+  #status-area {
+    margin-top: 12px;
+    display: none;
+  }
+
+  #timer-text {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
   #progress-outer {
     background: #e6e6e6;
     border-radius: 6px;
@@ -47,12 +80,14 @@
     height: 12px;
     width: 100%;
   }
+
   #progress-inner {
     background: #4CAF50;
     height: 100%;
     width: 0%;
-    transition: width 1s linear;
+    transition: width 0.3s linear;
   }
+
   #error-text {
     color: #ff4b4b;
     font-size: 14px;
@@ -61,51 +96,83 @@
   }
 </style>
 </head>
+
 <body>
+
 <div id="wrap">
-  <button id="rec-btn">🔴 Start Recording</button>
+
+  <button id="rec-btn">
+    🔴 Start Recording
+  </button>
+
   <div id="status-area">
-    <div id="timer-text">⏱ Recording... 30 s remaining</div>
-    <div id="progress-outer"><div id="progress-inner"></div></div>
+
+    <div id="timer-text">
+      ⏱ Recording...
+    </div>
+
+    <div id="progress-outer">
+      <div id="progress-inner"></div>
+    </div>
+
   </div>
+
   <div id="error-text"></div>
+
 </div>
 
 <script>
-/* ---------- Minimal vanilla-JS Streamlit component protocol ---------- */
-/* No build step / no external component-lib needed -- this is the same */
-/* handful of postMessage calls the official React template wraps.      */
+
+/* =====================================================
+   STREAMLIT COMPONENT COMMUNICATION
+===================================================== */
 
 function sendToStreamlit(type, data) {
-  var payload = Object.assign({ isStreamlitMessage: true, type: type }, data || {});
+
+  var payload = Object.assign(
+    {
+      isStreamlitMessage: true,
+      type: type
+    },
+    data || {}
+  );
+
   window.parent.postMessage(payload, "*");
 }
 
+
 function streamlitSetComponentValue(value) {
-  sendToStreamlit("streamlit:setComponentValue", { value: value, dataType: "json" });
+
+  sendToStreamlit(
+    "streamlit:setComponentValue",
+    {
+      value: value,
+      dataType: "json"
+    }
+  );
+
 }
+
 
 function streamlitSetFrameHeight() {
-  var h = document.documentElement.scrollHeight;
-  sendToStreamlit("streamlit:setFrameHeight", { height: h });
+
+  var height = document.documentElement.scrollHeight;
+
+  sendToStreamlit(
+    "streamlit:setFrameHeight",
+    {
+      height: height
+    }
+  );
+
 }
 
+
+/* =====================================================
+   CONFIGURATION
+===================================================== */
+
 var RECORD_SECONDS = 30;
-
-window.addEventListener("message", function (event) {
-  if (!event.data || event.data.type !== "streamlit:render") return;
-  var args = event.data.args || {};
-  if (args.record_seconds) {
-    RECORD_SECONDS = args.record_seconds;
-    document.getElementById("timer-text").innerText =
-      "⏱ Recording... " + RECORD_SECONDS + " s remaining";
-  }
-});
-
-sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
-setTimeout(streamlitSetFrameHeight, 0);
-
-/* ---------------------------- Recorder ---------------------------- */
 
 var recBtn = document.getElementById("rec-btn");
 var statusArea = document.getElementById("status-area");
@@ -113,170 +180,740 @@ var timerText = document.getElementById("timer-text");
 var progressInner = document.getElementById("progress-inner");
 var errorText = document.getElementById("error-text");
 
-var state = "idle"; // idle -> recording -> stopped
-var audioContext, sourceNode, processorNode, mediaStream;
-var pcmChunks = [];
-var sampleRate = 44100;
-var timerInterval = null;
 
-function showError(msg) {
-  errorText.innerText = msg;
+/* =====================================================
+   RECORDER VARIABLES
+===================================================== */
+
+var state = "idle";
+
+var audioContext = null;
+var sourceNode = null;
+var processorNode = null;
+var gainNode = null;
+var mediaStream = null;
+
+var pcmChunks = [];
+
+var sampleRate = 44100;
+
+var timerInterval = null;
+var recordingStartTime = null;
+
+var recordingId = 0;
+
+
+/* =====================================================
+   STREAMLIT INITIALISATION
+===================================================== */
+
+window.addEventListener("message", function(event) {
+
+  if (!event.data) return;
+
+  if (event.data.type === "streamlit:render") {
+
+    var args = event.data.args || {};
+
+    if (args.record_seconds) {
+
+      RECORD_SECONDS = Number(args.record_seconds);
+
+      if (state === "idle") {
+
+        timerText.innerText =
+          "⏱ Recording... " + RECORD_SECONDS + " s remaining";
+
+      }
+
+    }
+
+  }
+
+});
+
+
+sendToStreamlit(
+  "streamlit:componentReady",
+  {
+    apiVersion: 1
+  }
+);
+
+setTimeout(streamlitSetFrameHeight, 100);
+
+
+/* =====================================================
+   ERROR HANDLING
+===================================================== */
+
+function showError(message) {
+
+  errorText.innerText = message;
+
   errorText.style.display = "block";
+
   streamlitSetFrameHeight();
+
 }
 
-async function startRecording() {
-  errorText.style.display = "none";
-  pcmChunks = [];
 
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-    });
-  } catch (err) {
-    showError("Microphone access denied or unavailable: " + err.message);
+function hideError() {
+
+  errorText.innerText = "";
+
+  errorText.style.display = "none";
+
+}
+
+
+/* =====================================================
+   START RECORDING
+===================================================== */
+
+async function startRecording() {
+
+  if (state === "recording" || state === "processing") {
     return;
   }
 
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  sampleRate = audioContext.sampleRate;
-  sourceNode = audioContext.createMediaStreamSource(mediaStream);
-  // ScriptProcessorNode is deprecated but still broadly supported and
-  // needs no extra worklet file -- fine for this use case.
-  processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+  hideError();
 
-  processorNode.onaudioprocess = function (e) {
-    var channelData = e.inputBuffer.getChannelData(0);
-    pcmChunks.push(new Float32Array(channelData));
-  };
-
-  sourceNode.connect(processorNode);
-  processorNode.connect(audioContext.destination);
-
-  state = "recording";
-  recBtn.innerText = "⏹ Stop Recording";
-  recBtn.classList.add("recording");
-  recBtn.classList.remove("saved");
-
-  statusArea.style.display = "block";
-  startTimer();
-  streamlitSetFrameHeight();
-}
-
-function stopRecording() {
-  if (processorNode) processorNode.disconnect();
-  if (sourceNode) sourceNode.disconnect();
-  if (mediaStream) mediaStream.getTracks().forEach(function (t) { t.stop(); });
-  if (audioContext) audioContext.close();
   stopTimer();
 
-  var wavBlob = encodeWAV(pcmChunks, sampleRate);
-  var reader = new FileReader();
-  reader.onloadend = function () {
-    var base64data = reader.result.split(",")[1];
-    streamlitSetComponentValue({
-      audio_base64: base64data,
-      sample_rate: sampleRate,
-      format: "wav"
-    });
-  };
-  reader.readAsDataURL(wavBlob);
+  pcmChunks = [];
 
-  state = "stopped";
-  recBtn.innerText = "✅ Saved — Record Again";
-  recBtn.classList.remove("recording");
-  recBtn.classList.add("saved");
-  streamlitSetFrameHeight();
+  recordingId++;
+
+  var currentRecordingId = recordingId;
+
+  state = "starting";
+
+  recBtn.disabled = true;
+
+  recBtn.innerText = "Connecting microphone...";
+
+  try {
+
+    /* Request microphone access */
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+
+      audio: {
+
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+
+      }
+
+    });
+
+    audioContext = new (
+      window.AudioContext ||
+      window.webkitAudioContext
+    )();
+
+    await audioContext.resume();
+
+    sampleRate = audioContext.sampleRate;
+
+    sourceNode = audioContext.createMediaStreamSource(
+      mediaStream
+    );
+
+    processorNode = audioContext.createScriptProcessor(
+      4096,
+      1,
+      1
+    );
+
+    /* Prevent microphone feedback */
+
+    gainNode = audioContext.createGain();
+
+    gainNode.gain.value = 0;
+
+    /* Capture microphone audio */
+
+    processorNode.onaudioprocess = function(event) {
+
+      if (state !== "recording") return;
+
+      var channelData =
+        event.inputBuffer.getChannelData(0);
+
+      pcmChunks.push(
+        new Float32Array(channelData)
+      );
+
+    };
+
+    sourceNode.connect(processorNode);
+
+    processorNode.connect(gainNode);
+
+    gainNode.connect(audioContext.destination);
+
+    /* Update UI */
+
+    state = "recording";
+
+    recBtn.disabled = false;
+
+    recBtn.innerText = "⏹ Stop Recording";
+
+    recBtn.classList.add("recording");
+
+    recBtn.classList.remove("saved");
+    recBtn.classList.remove("processing");
+
+    statusArea.style.display = "block";
+
+    recordingStartTime = Date.now();
+
+    startTimer(currentRecordingId);
+
+    streamlitSetFrameHeight();
+
+  }
+
+  catch(error) {
+
+    state = "idle";
+
+    recBtn.disabled = false;
+
+    recBtn.innerText = "🔴 Start Recording";
+
+    showError(
+      "Microphone access failed: " + error.message
+    );
+
+    cleanupAudio();
+
+  }
+
 }
 
-recBtn.addEventListener("click", function () {
-  if (state === "idle") {
-    startRecording();
-  } else if (state === "recording") {
-    stopRecording();
-  } else {
-    // "Record Again" -- reset and start a fresh recording immediately,
-    // still within this same click's user-gesture context.
-    state = "idle";
-    startRecording();
-  }
-});
 
-/* ------------------------------ Timer ------------------------------ */
+/* =====================================================
+   RECORDING TIMER
+===================================================== */
 
-function startTimer() {
-  var elapsed = 0;
-  timerText.innerText = "⏱ Recording... " + RECORD_SECONDS + " s remaining";
+function startTimer(currentRecordingId) {
+
+  stopTimer();
+
+  var duration = RECORD_SECONDS * 1000;
+
+  timerText.innerText =
+    "⏱ Recording... " + RECORD_SECONDS + " s remaining";
+
   progressInner.style.width = "0%";
+
   progressInner.style.background = "#4CAF50";
 
-  timerInterval = setInterval(function () {
-    elapsed += 1;
-    var remaining = Math.max(0, RECORD_SECONDS - elapsed);
-    var pct = Math.min(100, (elapsed / RECORD_SECONDS) * 100);
-    progressInner.style.width = pct + "%";
+  timerInterval = setInterval(function() {
 
-    if (remaining > 0) {
-      timerText.innerText = "⏱ Recording... " + remaining + " s remaining";
-    } else {
-      timerText.innerText = "✅ 30 seconds reached. You may now press Stop Recording.";
-      progressInner.style.background = "#2e7d32";
-      clearInterval(timerInterval);
+    if (
+      state !== "recording" ||
+      currentRecordingId !== recordingId
+    ) {
+
+      stopTimer();
+
+      return;
+
     }
-  }, 1000);
+
+    var elapsed = Date.now() - recordingStartTime;
+
+    var remaining = Math.max(
+      0,
+      Math.ceil((duration - elapsed) / 1000)
+    );
+
+    var percentage = Math.min(
+      100,
+      (elapsed / duration) * 100
+    );
+
+    progressInner.style.width = percentage + "%";
+
+    timerText.innerText =
+      "⏱ Recording... " + remaining + " s remaining";
+
+    /* Automatically stop at 30 seconds */
+
+    if (elapsed >= duration) {
+
+      stopRecording();
+
+    }
+
+  }, 200);
+
 }
+
 
 function stopTimer() {
-  if (timerInterval) {
+
+  if (timerInterval !== null) {
+
     clearInterval(timerInterval);
+
     timerInterval = null;
+
   }
+
 }
 
-/* --------------------------- WAV encoding --------------------------- */
+
+/* =====================================================
+   STOP RECORDING
+===================================================== */
+
+function stopRecording() {
+
+  if (state !== "recording") return;
+
+  state = "processing";
+
+  stopTimer();
+
+  /* Stop microphone processing */
+
+  if (processorNode) {
+
+    processorNode.onaudioprocess = null;
+
+    processorNode.disconnect();
+
+  }
+
+  if (sourceNode) {
+
+    sourceNode.disconnect();
+
+  }
+
+  if (gainNode) {
+
+    gainNode.disconnect();
+
+  }
+
+  /* Stop microphone tracks */
+
+  if (mediaStream) {
+
+    mediaStream.getTracks().forEach(function(track) {
+
+      track.stop();
+
+    });
+
+  }
+
+  /* Close audio context */
+
+  if (audioContext) {
+
+    var contextToClose = audioContext;
+
+    audioContext = null;
+
+    contextToClose.close().catch(function(err) {
+
+      console.warn("Audio context cleanup:", err);
+
+    });
+
+  }
+
+  /* Update interface */
+
+  recBtn.disabled = true;
+
+  recBtn.innerText = "Processing recording...";
+
+  recBtn.classList.remove("recording");
+
+  recBtn.classList.remove("saved");
+
+  recBtn.classList.add("processing");
+
+  timerText.innerText =
+    "⏳ Preparing your recording...";
+
+  progressInner.style.width = "100%";
+
+  streamlitSetFrameHeight();
+
+  /* Validate audio */
+
+  if (pcmChunks.length === 0) {
+
+    state = "idle";
+
+    recBtn.disabled = false;
+
+    recBtn.innerText = "🔴 Start Recording";
+
+    recBtn.classList.remove("processing");
+
+    showError(
+      "No audio was captured. Please try recording again."
+    );
+
+    return;
+
+  }
+
+  try {
+
+    /* Encode audio as WAV */
+
+    var wavBlob = encodeWAV(
+      pcmChunks,
+      sampleRate
+    );
+
+    var reader = new FileReader();
+
+    reader.onload = function() {
+
+      try {
+
+        var result = reader.result;
+
+        if (!result || result.indexOf(",") === -1) {
+
+          throw new Error("Invalid audio encoding.");
+
+        }
+
+        var base64data = result.split(",")[1];
+
+        if (!base64data) {
+
+          throw new Error("Audio data is empty.");
+
+        }
+
+        /* Build result for Python */
+
+        var audioResult = {
+
+          audio_base64: base64data,
+
+          sample_rate: sampleRate,
+
+          format: "wav"
+
+        };
+
+        /* Send audio to Streamlit */
+
+        streamlitSetComponentValue(audioResult);
+
+        /* Update recorder state */
+
+        state = "stopped";
+
+        recBtn.disabled = false;
+
+        recBtn.innerText =
+          "✅ Saved — Record Again";
+
+        recBtn.classList.remove("processing");
+
+        recBtn.classList.add("saved");
+
+        timerText.innerText =
+          "✅ Recording ready. You can continue.";
+
+        progressInner.style.background = "#2e7d32";
+
+        streamlitSetFrameHeight();
+
+      }
+
+      catch(error) {
+
+        state = "stopped";
+
+        recBtn.disabled = false;
+
+        recBtn.innerText = "🔴 Try Again";
+
+        recBtn.classList.remove("processing");
+
+        showError(
+          "Could not send recording: " + error.message
+        );
+
+      }
+
+    };
+
+
+    reader.onerror = function() {
+
+      state = "stopped";
+
+      recBtn.disabled = false;
+
+      recBtn.innerText = "🔴 Try Again";
+
+      recBtn.classList.remove("processing");
+
+      showError("Unable to read the recorded audio.");
+
+    };
+
+    reader.readAsDataURL(wavBlob);
+
+  }
+
+  catch(error) {
+
+    state = "stopped";
+
+    recBtn.disabled = false;
+
+    recBtn.innerText = "🔴 Try Again";
+
+    recBtn.classList.remove("processing");
+
+    showError(
+      "Recording failed: " + error.message
+    );
+
+  }
+
+}
+
+
+/* =====================================================
+   AUDIO CLEANUP
+===================================================== */
+
+function cleanupAudio() {
+
+  stopTimer();
+
+  if (processorNode) {
+
+    processorNode.disconnect();
+
+    processorNode = null;
+
+  }
+
+  if (sourceNode) {
+
+    sourceNode.disconnect();
+
+    sourceNode = null;
+
+  }
+
+  if (gainNode) {
+
+    gainNode.disconnect();
+
+    gainNode = null;
+
+  }
+
+  if (mediaStream) {
+
+    mediaStream.getTracks().forEach(function(track) {
+
+      track.stop();
+
+    });
+
+    mediaStream = null;
+
+  }
+
+  if (audioContext) {
+
+    var context = audioContext;
+
+    audioContext = null;
+
+    context.close().catch(function() {});
+
+  }
+
+}
+
+
+/* =====================================================
+   RECORD BUTTON
+===================================================== */
+
+recBtn.addEventListener("click", function() {
+
+  if (state === "idle") {
+
+    startRecording();
+
+  }
+
+  else if (state === "recording") {
+
+    stopRecording();
+
+  }
+
+  else if (state === "stopped") {
+
+    /* Start a fresh recording */
+
+    state = "idle";
+
+    recBtn.classList.remove("saved");
+
+    progressInner.style.width = "0%";
+
+    statusArea.style.display = "block";
+
+    startRecording();
+
+  }
+
+});
+
+
+/* =====================================================
+   WAV ENCODING - PCM 16 BIT MONO
+===================================================== */
 
 function encodeWAV(channelBuffers, sr) {
+
   var totalLength = 0;
-  for (var i = 0; i < channelBuffers.length; i++) totalLength += channelBuffers[i].length;
+
+  for (var i = 0; i < channelBuffers.length; i++) {
+
+    totalLength += channelBuffers[i].length;
+
+  }
 
   var samples = new Float32Array(totalLength);
+
   var offset = 0;
+
   for (var j = 0; j < channelBuffers.length; j++) {
+
     samples.set(channelBuffers[j], offset);
+
     offset += channelBuffers[j].length;
+
   }
 
-  var buffer = new ArrayBuffer(44 + samples.length * 2);
+  var buffer = new ArrayBuffer(
+    44 + samples.length * 2
+  );
+
   var view = new DataView(buffer);
 
+
   function writeString(view, offset, str) {
-    for (var i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+
+    for (var i = 0; i < str.length; i++) {
+
+      view.setUint8(
+        offset + i,
+        str.charCodeAt(i)
+      );
+
+    }
+
   }
+
 
   function floatTo16BitPCM(view, offset, input) {
-    for (var i = 0; i < input.length; i++, offset += 2) {
-      var s = Math.max(-1, Math.min(1, input[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+
+    for (
+      var i = 0;
+      i < input.length;
+      i++, offset += 2
+    ) {
+
+      var s = Math.max(
+        -1,
+        Math.min(1, input[i])
+      );
+
+      view.setInt16(
+        offset,
+        s < 0 ? s * 0x8000 : s * 0x7FFF,
+        true
+      );
+
     }
+
   }
 
-  writeString(view, 0, "RIFF");
-  view.setUint32(4, 36 + samples.length * 2, true);
-  writeString(view, 8, "WAVE");
-  writeString(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);       // PCM format
-  view.setUint16(22, 1, true);       // mono
-  view.setUint32(24, sr, true);      // sample rate
-  view.setUint32(28, sr * 2, true);  // byte rate
-  view.setUint16(32, 2, true);       // block align
-  view.setUint16(34, 16, true);      // bits per sample
-  writeString(view, 36, "data");
-  view.setUint32(40, samples.length * 2, true);
-  floatTo16BitPCM(view, 44, samples);
 
-  return new Blob([view], { type: "audio/wav" });
+  /* WAV header */
+
+  writeString(view, 0, "RIFF");
+
+  view.setUint32(
+    4,
+    36 + samples.length * 2,
+    true
+  );
+
+  writeString(view, 8, "WAVE");
+
+  writeString(view, 12, "fmt ");
+
+  view.setUint32(16, 16, true);
+
+  view.setUint16(20, 1, true);
+
+  view.setUint16(22, 1, true);
+
+  view.setUint32(24, sr, true);
+
+  view.setUint32(28, sr * 2, true);
+
+  view.setUint16(32, 2, true);
+
+  view.setUint16(34, 16, true);
+
+  writeString(view, 36, "data");
+
+  view.setUint32(
+    40,
+    samples.length * 2,
+    true
+  );
+
+  floatTo16BitPCM(
+    view,
+    44,
+    samples
+  );
+
+  return new Blob(
+    [view],
+    {
+      type: "audio/wav"
+    }
+  );
+
 }
+
 </script>
+
 </body>
 </html>
