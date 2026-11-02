@@ -1,4 +1,0 @@
-fev1,fev1_binary_pred,fev1_binary_label,fev1_binary_confidence,fev1_multiclass_pred,fev1_multiclass_label,fev1_multiclass_confidence,fev1_fvc,fev1_fvc_binary_pred,fev1_fvc_binary_label,fev1_fvc_binary_confidence,fev1_fvc_multiclass_pred,fev1_fvc_multiclass_label,fev1_fvc_multiclass_confidence,patient
-78.15985101377301,1,Normal,90.4542465209961,2,Normal FEV1,82.43972778320312,70.42158021421342,1,Normal,76.62713623046875,3,Normal,92.99052429199219,17489479-48f5-497e-8906-5ee9ab72dffd
-78.0541610484126,1,Normal,85.68582916259766,2,Normal FEV1,85.5572738647461,71.07601850320329,1,Normal,68.84883880615234,3,Normal,92.37484741210938,741b6bfd-f9a5-4028-a890-6565a5d9f68a
-77.9565990162499,1,Normal,92.46097564697266,2,Normal FEV1,93.68775939941406,70.29838487302594,0,Abnormal,69.12865447998047,3,Normal,85.87089538574219,d489cefc-bac2-46aa-bd14-0c6553cbef4f
