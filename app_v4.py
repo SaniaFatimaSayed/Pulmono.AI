@@ -357,9 +357,9 @@ elif st.session_state.page == "record":
     with col2:
         if st.session_state.audio_bytes is not None:
 
-        if st.button("Next ➜"):
-            st.session_state.page = "phenotype"
-            st.rerun()
+            if st.button("Next ➜"):
+                st.session_state.page = "phenotype"
+                st.rerun()
 
 # ---------------- UPLOAD PAGE ----------------
 elif st.session_state.page == "upload":
