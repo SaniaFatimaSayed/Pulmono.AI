@@ -1,368 +1,244 @@
 import os
+import io
 import uuid
+import wave
 import base64
 
 import streamlit as st
-
-from mic_recorder_custom import mic_recorder_custom
 
 from audio_pipeline import run_audio_pipeline
 from audio_pipeline_v2 import run_audio_pipeline_from_path
 from audio_pipeline_without_pheno import run_audio_pipeline_without_pheno
 from audio_pipeline_without_pheno_v2 import run_audio_pipeline_without_pheno_path
 
+# Native recorder (Streamlit >= 1.39) is the most robust option.
+# The custom component is only used as a fallback on older versions.
+USE_NATIVE_RECORDER = hasattr(st, "audio_input")
+if not USE_NATIVE_RECORDER:
+    from mic_recorder_custom import mic_recorder_custom
+
 # PAGE CONFIG
-st.set_page_config(
-    page_title="Pulmono.AI",
-    layout="wide"
-)
+st.set_page_config(page_title="Pulmono.AI", layout="wide")
 
 # CONFIG
 AUDIO_DIR = "outputs/recorded_audio"
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 LOGO = "Pulmono.AI.png"
-
 RECORD_SECONDS = 30
+CROP_START = 15
+CROP_END = 25
+
+# Thresholds
+FEV1_NORMAL, FEV1_BORDERLINE = 81, 79
+FEV1_FVC_NORMAL, FEV1_FVC_BORDERLINE = 71, 69
+
+RAINBOW_TEXT = (
+    "When the sunlight strikes raindrops in the air, they act as a prism and form "
+    "a rainbow. The rainbow is a division of white light into many beautiful colors. "
+    "These take the shape of a long round arch, with its path high above, and its "
+    "two ends apparently beyond the horizon. There is, according to legend, a "
+    "boiling pot of gold at one end. People look, but no one ever finds it. When a "
+    "man looks for something beyond his reach, his friends say he is looking for "
+    "the pot of gold at the end of the rainbow. Throughout the centuries people "
+    "have explained the rainbow in various ways. Some have accepted it as a "
+    "miracle without physical explanation. To the Hebrews it was a token that "
+    "there would be no more universal floods. The Greeks used to imagine that it "
+    "was a sign from the gods to foretell war or heavy rain."
+)
 
 # SESSION STATE
 DEFAULT_STATE = {
-
     "page": "home",
-
     "input_mode": None,
-
     "audio_path": None,
-
     "audio_bytes": None,
-
     "uploaded_file": None,
-
     "results": None,
-
 }
 
 for k, v in DEFAULT_STATE.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# Changing this number gives the recorder widget a fresh key, which clears it.
+if "recorder_nonce" not in st.session_state:
+    st.session_state.recorder_nonce = 0
+
 
 # HELPERS
 def save_audio(audio_bytes):
-    path = os.path.join(
-        AUDIO_DIR,
-        f"{uuid.uuid4()}.wav"
-    )
-
+    path = os.path.join(AUDIO_DIR, f"{uuid.uuid4()}.wav")
     with open(path, "wb") as f:
         f.write(audio_bytes)
-
     return path
+
+
+def wav_duration(audio_bytes):
+    """Return duration in seconds for WAV bytes, or None if unreadable."""
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as w:
+            return w.getnframes() / float(w.getframerate())
+    except Exception:
+        return None
 
 
 def reset():
     for k, v in DEFAULT_STATE.items():
         st.session_state[k] = v
+    st.session_state.recorder_nonce += 1
 
 
-# -----------------CSS--------------------------
+def go(page):
+    st.session_state.page = page
+    st.rerun()
 
+
+def classify(value, normal_above, borderline_from):
+    if value > normal_above:
+        return "Normal"
+    if value >= borderline_from:
+        return "Borderline Normal"
+    return "Abnormal"
+
+
+# CSS
 st.markdown(
     """
     <style>
-
-    .header{
-
-    display:flex;
-
-    align-items:center;
-
-    gap:10px;
-
-    margin-bottom:25px;
-
-    }
-
-    .logo{
-
-    width:85px;
-
-    height:85px;
-
-    border-radius:50%;
-
-    object-fit:cover;
-
-    }
-
-    .title{
-
-    font-size:42px;
-
-    font-weight:700;
-
-    margin:0;
-
-    }
-
-    .subtitle{
-
-    font-size:18px;
-
-    color:gray;
-
-    margin-top:-5px;
-
-    }
-
-    /* Uses Streamlit theme automatically */
-
+    .header{display:flex;align-items:center;gap:10px;margin-bottom:25px;}
+    .logo{width:85px;height:85px;border-radius:50%;object-fit:cover;}
+    .title{font-size:42px;font-weight:700;margin:0;}
+    .subtitle{font-size:18px;color:gray;margin-top:-5px;}
     .rainbow-text{
-
-    font-size:20px;
-
-    line-height:1.9;
-
-    font-weight:500;
-
-    color:var(--text-color);
-
-    padding:20px;
-
-    border-radius:10px;
-
-    border:1px solid rgba(150,150,150,.3);
-
-    background:rgba(127,127,127,.08);
-
+        font-size:20px;line-height:1.9;font-weight:500;
+        color:var(--text-color);padding:20px;border-radius:10px;
+        border:1px solid rgba(150,150,150,.3);
+        background:rgba(127,127,127,.08);
     }
-
-    div.stButton>button{
-
-    width:100%;
-
-    height:48px;
-
-    font-size:18px;
-
-    }
-
+    div.stButton>button{width:100%;height:48px;font-size:18px;}
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 # HEADER
-with open(LOGO, "rb") as f:
-    img = base64.b64encode(f.read()).decode()
+if os.path.exists(LOGO):
+    with open(LOGO, "rb") as f:
+        img = base64.b64encode(f.read()).decode()
+    logo_html = f'<img src="data:image/png;base64,{img}" class="logo">'
+else:
+    logo_html = ""
 
 st.markdown(
     f"""
 <div class="header">
-
-<img src="data:image/png;base64,{img}"
-class="logo">
-
+{logo_html}
 <div>
-
-<div class="title">
-Pulmono.AI
+<div class="title">Pulmono.AI</div>
+<div class="subtitle">Voice-based Lung Function Screening</div>
 </div>
-
-<div class="subtitle">
-Voice-based Lung Function Screening
-</div>
-
-</div>
-
 </div>
 """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
-# --------- HOME PAGE --------------
-if st.session_state.page == "home":
+page = st.session_state.page
 
-    st.info(
-        "Research prototype only. This tool does not replace clinical spirometry."
-    )
+# ---------------- HOME PAGE ----------------
+if page == "home":
 
+    st.info("Research prototype only. This tool does not replace clinical spirometry.")
     st.markdown("## Choose how you would like to provide your voice sample")
 
     col1, col2 = st.columns(2)
 
     with col1:
-
         st.subheader("Record Live")
-
-        st.write(
-            "Read the Rainbow Passage using your microphone."
-        )
-
-        if st.button("Use Microphone"):
+        st.write("Read the Rainbow Passage using your microphone.")
+        if st.button("Use Microphone", key="btn_mic"):
             st.session_state.input_mode = "record"
-
-            st.session_state.page = "record"
-
-            st.rerun()
+            go("record")
 
     with col2:
-
         st.subheader("Upload Recording")
-
-        st.write(
-            "Upload an existing WAV, MP3 or M4A recording."
-        )
-
-        if st.button("Upload Audio"):
+        st.write("Upload an existing WAV, MP3 or M4A recording.")
+        if st.button("Upload Audio", key="btn_upload"):
             st.session_state.input_mode = "upload"
-
-            st.session_state.page = "upload"
-
-            st.rerun()
+            go("upload")
 
 
-# ------------- RECORD PAGE ------------------
-elif st.session_state.page == "record":
+# ---------------- RECORD PAGE ----------------
+elif page == "record":
 
     st.header("Record Voice Sample")
 
     st.info(
-        "Please read the Rainbow Passage naturally for approximately 30 seconds.\n\n"
-        "Pulmono.AI will automatically analyse only the 15–25 second portion."
+        f"Please read the Rainbow Passage naturally for approximately {RECORD_SECONDS} seconds.\n\n"
+        f"Pulmono.AI will automatically analyse only the {CROP_START}–{CROP_END} second portion."
     )
-
-    # RAINBOW PASSAGE
-    RAINBOW_TEXT = """
-        When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow.
-        The rainbow is a division of white light into many beautiful colors. These take the
-        shape of a long round arch, with its path high above, and its two ends apparently
-        beyond the horizon. There is, according to legend, a boiling pot of gold at one end.
-        People look, but no one ever finds it. When a man looks for something beyond his
-        reach, his friends say he is looking for the pot of gold at the end of the rainbow.
-        Throughout the centuries people have explained the rainbow in various ways. Some
-        have accepted it as a miracle without physical explanation. To the Hebrews it was a
-        token that there would be no more universal floods. The Greeks used to imagine that
-        it was a sign from the gods to foretell war or heavy rain.
-        """
 
     st.markdown(
-        f"""
-        <div class="rainbow-text">
-        {RAINBOW_TEXT}
-        """,
-        unsafe_allow_html=True
+        f'<div class="rainbow-text">{RAINBOW_TEXT}</div>',
+        unsafe_allow_html=True,
     )
+    st.write("")
 
-    # st.info("""
-    # 🎙 Instructions
-    #
-    # 1. Click **🔴 Start Recording** below. This immediately starts both your
-    #    microphone and the 30-second timer.
-    # 2. Read the Rainbow Passage naturally.
-    # 3. Continue reading for approximately **30 seconds**.
-    # 4. Press **⏹ Stop Recording**.
-    # 5. Continue to the next page.
-    # """)
+    rec_key = f"recorder_{st.session_state.recorder_nonce}"
 
-    # Single custom component: one click both requests the microphone and
-    # starts the on-screen timer, since they happen in the same JS click
-    # handler in the same browser frame. Returns None until a recording has
-    # been stopped, then {"audio_base64": ..., "sample_rate": ..., "format": "wav"}.
-    # result = mic_recorder_custom(record_seconds=RECORD_SECONDS, key="custom_recorder")
-    #
-    # if result is not None and result.get("audio_base64"):
-    #     new_bytes = base64.b64decode(result["audio_base64"])
-    #
-    #     if new_bytes != st.session_state.audio_bytes:
-    #         path = save_audio(new_bytes)
-    #
-    #         st.session_state.audio_path = path
-    #         st.session_state.audio_bytes = new_bytes
-    #
-    #         st.success("Recording saved successfully.")
-    #
-    # if st.session_state.audio_bytes is not None:
-    #     st.audio(
-    #         st.session_state.audio_bytes,
-    #         format="audio/wav"
-    #     )
-    #
-    # col1, col2 = st.columns(2)
-    #
-    # with col1:
-    #
-    #     if st.button("⬅ Back"):
-    #         reset()
-    #
-    #         st.rerun()
-    #
-    # with col2:
-    #
-    #     if st.session_state.audio_path is not None:
-    #
-    #         if st.button("Next ➜"):
-    #             st.session_state.page = "phenotype"
-    #
-    #             st.rerun()
-
-    result = mic_recorder_custom(
-        record_seconds=RECORD_SECONDS,
-        key="custom_recorder"
-    )
-
-    # DEBUG: Check what the recorder returns
-    if result is not None:
-
-        st.write("Recorder response type:", type(result))
-
-        if isinstance(result, dict):
-
-            st.write("Recorder response keys:", list(result.keys()))
-
-            if result.get("audio_base64"):
-
-                new_bytes = base64.b64decode(
-                    result["audio_base64"]
-                )
-
-                if new_bytes != st.session_state.audio_bytes:
-                    path = save_audio(new_bytes)
-
-                    st.session_state.audio_path = path
-                    st.session_state.audio_bytes = new_bytes
-
-                    st.success("Recording saved successfully!")
-
-            else:
-                st.warning("Recorder returned data, but no audio_base64 was found.")
-
-    # Display recording
-    if st.session_state.audio_bytes is not None:
-        st.audio(
-            st.session_state.audio_bytes,
-            format="audio/wav"
+    if USE_NATIVE_RECORDER:
+        st.caption(
+            f"Press the microphone button, read the passage for about {RECORD_SECONDS} "
+            "seconds, then press stop."
         )
+        try:
+            audio = st.audio_input("Record your voice", sample_rate=16000, key=rec_key)
+        except TypeError:  # older Streamlit without the sample_rate argument
+            audio = st.audio_input("Record your voice", key=rec_key)
 
-        st.success("Recording ready for analysis.")
+        if audio is not None:
+            new_bytes = audio.getvalue()
+            if new_bytes != st.session_state.audio_bytes:
+                st.session_state.audio_path = save_audio(new_bytes)
+                st.session_state.audio_bytes = new_bytes
+    else:
+        result = mic_recorder_custom(record_seconds=RECORD_SECONDS, key=rec_key)
 
-    # Navigation
+        if isinstance(result, dict) and result.get("audio_base64"):
+            new_bytes = base64.b64decode(result["audio_base64"])
+            if new_bytes != st.session_state.audio_bytes:
+                st.session_state.audio_path = save_audio(new_bytes)
+                st.session_state.audio_bytes = new_bytes
+
+    if st.session_state.audio_bytes is not None:
+        duration = wav_duration(st.session_state.audio_bytes)
+        if duration is not None and duration < CROP_END:
+            st.warning(
+                f"Your recording is {duration:.0f}s long, but the analysis needs at least "
+                f"{CROP_END}s. Please record again and keep reading for about "
+                f"{RECORD_SECONDS}s."
+            )
+        else:
+            st.success("Recording ready for analysis.")
+
+        if not USE_NATIVE_RECORDER:
+            st.audio(st.session_state.audio_bytes, format="audio/wav")
+
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("⬅ Back"):
+        if st.button("⬅ Back", key="rec_back"):
             reset()
             st.rerun()
 
     with col2:
         if st.session_state.audio_bytes is not None:
+            if st.button("Next ➜", key="rec_next"):
+                go("phenotype")
 
-            if st.button("Next ➜"):
-                st.session_state.page = "phenotype"
-                st.rerun()
 
 # ---------------- UPLOAD PAGE ----------------
-elif st.session_state.page == "upload":
+elif page == "upload":
 
     st.header("Upload Voice Recording")
 
@@ -372,7 +248,8 @@ elif st.session_state.page == "upload":
 
     uploaded_file = st.file_uploader(
         "Choose an audio file",
-        type=["wav", "mp3", "m4a"]
+        type=["wav", "mp3", "m4a"],
+        key="uploader",
     )
 
     if uploaded_file is not None:
@@ -382,194 +259,127 @@ elif st.session_state.page == "upload":
     col1, col2 = st.columns(2)
 
     with col1:
-
-        if st.button("⬅ Back"):
+        if st.button("⬅ Back", key="up_back"):
             reset()
-
             st.rerun()
 
     with col2:
-
         if st.session_state.uploaded_file is not None:
-
-            if st.button("Next ➜"):
-                st.session_state.page = "phenotype"
-
-                st.rerun()
+            if st.button("Next ➜", key="up_next"):
+                go("phenotype")
 
 
-# ----------- PHENOTYPE PAGE -----------------
-
-elif st.session_state.page == "phenotype":
+# ---------------- PHENOTYPE PAGE ----------------
+elif page == "phenotype":
 
     st.header("Optional Patient Information")
 
     st.info(
         "Pulmono.AI can predict lung function using voice recordings alone. "
-        "Providing phenotype information (age, height and weight) may improve prediction accuracy."
+        "Providing phenotype information (age, height and weight) may improve "
+        "prediction accuracy."
     )
-
-    st.header("Patient Information")
 
     use_pheno = st.radio(
         "Do you have the patient's phenotype information?",
-        [
-            "Yes",
-            "No (use voice-only model)"
-        ]
+        ["Yes", "No (use voice-only model)"],
+        key="use_pheno",
     )
+    with_pheno = use_pheno == "Yes"
 
-    st.info(
-        "Please enter the patient's phenotype information. "
-        "These values are combined with the acoustic biomarkers."
-    )
+    patient_info = None
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        age = st.number_input(
-            "Age",
-            min_value=1,
-            max_value=120,
-            value=30
+    if with_pheno:
+        st.info(
+            "Please enter the patient's phenotype information. "
+            "These values are combined with the acoustic biomarkers."
         )
 
-        weight = st.number_input(
-            "Weight (kg)",
-            min_value=20,
-            max_value=250,
-            value=70
-        )
+        col1, col2 = st.columns(2)
 
-    with col2:
+        with col1:
+            age = st.number_input("Age", min_value=1, max_value=120, value=30, key="age")
+            weight = st.number_input(
+                "Weight (kg)", min_value=20, max_value=250, value=70, key="weight"
+            )
 
-        height = st.number_input(
-            "Height (cm)",
-            min_value=50,
-            max_value=250,
-            value=165
-        )
+        with col2:
+            height = st.number_input(
+                "Height (cm)", min_value=50, max_value=250, value=165, key="height"
+            )
+            sex = st.radio("Sex", ["Female", "Male"], key="sex")
 
-        sex = st.radio(
-            "Sex",
-            ["Female", "Male"]
-        )
+        patient_info = {
+            "age": age,
+            "height": height,
+            "weight": weight,
+            "is_male": 1 if sex == "Male" else 0,
+            "is_female": 1 if sex == "Female" else 0,
+        }
 
     st.divider()
 
     noise_mode = st.radio(
         "Recording Environment",
-        [
-            "Quiet environment",
-            "Noisy environment"
-        ],
-        horizontal=True
+        ["Quiet environment", "Noisy environment"],
+        horizontal=True,
+        key="noise_mode",
     )
-
-    patient_info = {
-
-        "age": age,
-
-        "height": height,
-
-        "weight": weight,
-
-        "is_male": 1 if sex == "Male" else 0,
-
-        "is_female": 1 if sex == "Female" else 0,
-
-    }
 
     left, right = st.columns(2)
 
-    # Back
-
     with left:
+        if st.button("⬅ Back", key="ph_back"):
+            go("record" if st.session_state.input_mode == "record" else "upload")
 
-        if st.button("⬅ Back"):
-
-            if st.session_state.input_mode == "record":
-
-                st.session_state.page = "record"
-
-            else:
-
-                st.session_state.page = "upload"
-
-            st.rerun()
-
-    # Run analysis
-
+    run_clicked = False
     with right:
+        run_clicked = st.button("Run Pulmono.AI Analysis", key="run_analysis")
 
-        if st.button("Run Pulmono.AI Analysis"):
-
+    # Run outside the column context so errors/spinner render full width
+    if run_clicked:
+        results = None
+        try:
             with st.spinner("Running Pulmono.AI..."):
 
-                # RECORDED USING MICROPHONE
-
                 if st.session_state.input_mode == "record":
-
-                    if use_pheno == "Yes":
+                    if with_pheno:
                         results = run_audio_pipeline_from_path(
-
                             audio_path=st.session_state.audio_path,
-
                             noise_mode=noise_mode,
-
                             patient_info=patient_info,
-
-                            crop_start=15,
-
-                            crop_end=25
-
+                            crop_start=CROP_START,
+                            crop_end=CROP_END,
                         )
-
                     else:
-
                         results = run_audio_pipeline_without_pheno_path(
-
                             audio_path=st.session_state.audio_path,
-
                             noise_mode=noise_mode,
-
-                            crop_start=15,
-
-                            crop_end=25
-
+                            crop_start=CROP_START,
+                            crop_end=CROP_END,
                         )
-                # UPLOADED AUDIO
                 else:
-                    if use_pheno == "Yes":
+                    if with_pheno:
                         results = run_audio_pipeline(
-
                             uploaded_file=st.session_state.uploaded_file,
-
                             noise_mode=noise_mode,
-
-                            patient_info=patient_info
-
+                            patient_info=patient_info,
                         )
                     else:
                         results = run_audio_pipeline_without_pheno(
-
                             uploaded_file=st.session_state.uploaded_file,
-
                             noise_mode=noise_mode,
-
                         )
+        except Exception as e:
+            st.error(f"Analysis failed: {e}")
+            st.exception(e)
+        else:
+            st.session_state.results = results
+            go("results")
 
-                st.session_state.results = results
 
-                st.session_state.page = "results"
-
-                st.rerun()
-
-
-# ------------- RESULTS PAGE -------------
-
-elif st.session_state.page == "results":
+# ---------------- RESULTS PAGE ----------------
+elif page == "results":
 
     st.title("Results")
 
@@ -577,72 +387,38 @@ elif st.session_state.page == "results":
 
     if results is None:
         st.error("No results available.")
-        if st.button("Start again"):
+        if st.button("Start again", key="res_restart"):
             reset()
             st.rerun()
 
     else:
-
         col1, col2 = st.columns(2)
 
         with col1:
-
             fev1 = results["fev1"]
-
-            st.metric(
-                "Predicted FEV1",
-                f"{fev1:.1f}%"
-            )
-
-            if fev1 > 81:
-                st.write("**Status:** Normal")
-            elif 79 <= fev1 <= 81:
-                st.write("**Status:** Borderline Normal")
-            else:
-                st.write("**Status:** Abnormal")
-
-            st.caption(
-                f"Confidence: {results['fev1_binary_confidence']:.1f}%"
-            )
+            st.metric("Predicted FEV1", f"{fev1:.1f}%")
+            st.write(f"**Status:** {classify(fev1, FEV1_NORMAL, FEV1_BORDERLINE)}")
+            st.caption(f"Confidence: {results['fev1_binary_confidence']:.1f}%")
 
         with col2:
-
             fev1_fvc = results["fev1_fvc"]
-
-            st.metric(
-                "Predicted FEV1/FVC",
-                f"{fev1_fvc:.1f}%"
+            st.metric("Predicted FEV1/FVC", f"{fev1_fvc:.1f}%")
+            st.write(
+                f"**Status:** {classify(fev1_fvc, FEV1_FVC_NORMAL, FEV1_FVC_BORDERLINE)}"
             )
-
-            if fev1_fvc > 71:
-                st.write("**Status:** Normal")
-            elif 69 <= fev1_fvc <= 71:
-                st.write("**Status:** Borderline Normal")
-            else:
-                st.write("**Status:** Abnormal")
-
-            st.caption(
-                f"Confidence: {results['fev1_fvc_binary_confidence']:.1f}%"
-            )
-
+            st.caption(f"Confidence: {results['fev1_fvc_binary_confidence']:.1f}%")
 
         st.warning(
-            "Research prototype only. "
-            "This tool does not replace clinical spirometry."
+            "Research prototype only. This tool does not replace clinical spirometry."
         )
 
         col1, col2 = st.columns(2)
 
         with col1:
-
-            if st.button("Analyse another recording"):
+            if st.button("Analyse another recording", key="res_again"):
                 reset()
-
                 st.rerun()
 
         with col2:
-
-            if st.button("Back to phenotype"):
-                st.session_state.page = "phenotype"
-
-                st.rerun()
+            if st.button("Back to phenotype", key="res_back"):
+                go("phenotype")
